@@ -4,6 +4,7 @@ import io
 import sys
 import logging
 from datetime import datetime, date
+from urllib.parse import unquote, urlparse
 
 
 
@@ -19,6 +20,12 @@ from dateutil.parser import parse as dateparse
 TARGET_PAGE = "https://www.mass.gov/lists/massachusetts-licensed-insurance-companies"
 XLS_NAME_PATTERN = re.compile(r"Massachusetts\s+Licensed\s+Or\s+Approved\s+Companies\.xls", re.I)
 today_str = datetime.today().strftime("%m%d%Y")
+INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*]')
+
+DOWNLOAD_ARCHIVE_DIR = os.getenv(
+    "MA_ADDRLIST_ARCHIVE_DIR",
+    r"\\njredbf2001\ProductManagement\Product\Auto\MASSACHUSETTS\Operational Processes\2A Form\MA Gov Company Address List"
+)
 
 
 SQL_SERVER   = os.getenv("SQL_SERVER",   "AE1SQLWPV20")
@@ -90,6 +97,40 @@ def download_file(url: str) -> bytes:
     r = requests.get(url, timeout=120)
     r.raise_for_status()
     return r.content
+
+def derive_download_filename(source_url: str, file_bytes: bytes) -> str:
+    """Return a sanitized filename with the download date appended."""
+    parsed = urlparse(source_url)
+    basename = os.path.basename(parsed.path.rstrip("/"))
+    basename = unquote(basename)
+    if not basename:
+        basename = "Massachusetts Licensed Or Approved Companies.xls"
+
+    stem, ext = os.path.splitext(basename)
+    if not stem:
+        stem = "Massachusetts Licensed Or Approved Companies"
+    if not ext:
+        ext = ".xlsx" if is_xlsx(file_bytes) else ".xls"
+
+    stem = INVALID_FILENAME_CHARS.sub("_", stem).strip() or "Massachusetts Licensed Or Approved Companies"
+    ext = INVALID_FILENAME_CHARS.sub("_", ext) if ext else ext
+
+    return f"{stem}_{today_str}{ext}"
+
+def archive_downloaded_file(file_bytes: bytes, source_url: str) -> str:
+    """Persist the downloaded file to the configured archive directory."""
+    if not DOWNLOAD_ARCHIVE_DIR:
+        raise RuntimeError("Archive directory is not configured; set MA_ADDRLIST_ARCHIVE_DIR or update the default.")
+
+    os.makedirs(DOWNLOAD_ARCHIVE_DIR, exist_ok=True)
+    filename = derive_download_filename(source_url, file_bytes)
+    full_path = os.path.join(DOWNLOAD_ARCHIVE_DIR, filename)
+
+    with open(full_path, "wb") as fh:
+        fh.write(file_bytes)
+
+    log.info(f"Archived download to {full_path}")
+    return full_path
 
 def is_xlsx(file_bytes: bytes) -> bool:
     """XLSX (OOXML) are ZIP files and start with PK\x03\x04."""
@@ -274,6 +315,7 @@ def main():
     try:
         xls_url = find_xls_url()
         file_bytes = download_file(xls_url)
+        archive_downloaded_file(file_bytes, xls_url)
 
         update_dt = read_update_date_from_b4(file_bytes)
         if update_dt:
