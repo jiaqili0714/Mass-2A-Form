@@ -5,8 +5,6 @@ INTO #09pnc
 FROM [JiLi].[dbo].[address_list]
 where company_type='Property & Casualty'
 
-
-
 select *
 INTO #rmv
 from jili.dbo.rmv_carrier_name
