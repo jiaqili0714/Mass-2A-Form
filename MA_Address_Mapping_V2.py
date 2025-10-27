@@ -367,7 +367,7 @@ def main():
         xls_url = find_xls_url()
         file_bytes = download_file(xls_url)
         
-        # --- 1.1 Save raw file to archive folder (MODIFIED) ---
+        # --- 1.1 Save raw file to archive folder ---
         os.makedirs(ARCHIVE_FOLDER, exist_ok=True)
         file_ext = ".xlsx" if is_xlsx(file_bytes) else ".xls"
         archive_filename = f"MA_Licensed_Companies_{date.today().strftime('%Y%m%d')}{file_ext}"
@@ -377,8 +377,8 @@ def main():
             f.write(file_bytes)
         log.info(f"Raw file saved for record at {archive_path}")
 
-# --- 1.2 Load data into DataFrame for Part 2 ---
-        update_dt = read_update_date_from_b4(file_bytes) # Still useful for logging
+        # --- 1.2 Load data into DataFrame for Part 2 ---
+        update_dt = read_update_date_from_b4(file_bytes)
         if update_dt:
             log.info(f"Update date (from B4): {update_dt.isoformat()}")
         else:
@@ -387,11 +387,8 @@ def main():
         df_mass_gov_raw = load_table_dataframe(file_bytes)
         df_mass_gov_cleaned = clean_and_trim(df_mass_gov_raw)
         
-        # --- NEW: Filter for 'Property & Casualty' ---
+        # --- 1.3 Filter for 'Property & Casualty' ---
         log.info(f"Loaded {len(df_mass_gov_cleaned)} total rows from Mass Gov list.")
-        
-        # The 'Company Type' column was normalized to 'company_type'
-        # We use str.contains() with case=False for a robust match
         filter_mask = df_mass_gov_cleaned['company_type'].str.contains(
             'Property & Casualty', 
             case=False, 
@@ -401,63 +398,102 @@ def main():
         
         if len(df_mass_gov) == 0:
             log.warning("Filter 'Property & Casualty' resulted in 0 companies. Check the string.")
-        else:
-            log.info(f"Filtered down to {len(df_mass_gov)} 'Property & Casualty' companies.")
         
-        # --- SQL Archive steps have been REMOVED ---
+        log.info(f"--- Part 1: Download & Archive Complete. {len(df_mass_gov)} 'P&C' rows loaded for processing. ---")
+
         
-        log.info(f"--- Part 1: Download & Archive Complete. {len(df_mass_gov)} rows loaded for processing. ---")
-        
-        # --- PART 2: Load RMV, Match, and Save Mapping Table ---
+        # --- PART 2: Load RMV, Match (Multi-Pass), and Save Mapping Table ---
         log.info("--- Starting Part 2: RMV Mapping ---")
         
         # 2.1 Load RMV Data
         df_rmv_raw = get_rmv_data(conn)
         
-        # 2.2 Apply Overrides
-        df_rmv = apply_hardcoded_matches(df_rmv_raw)
-
-        # 2.3 Normalize Names
-        log.info("Normalizing names for matching...")
-        df_mass_gov['normalized_name'] = df_mass_gov['company'].apply(normalize_name)
-        df_rmv['normalized_name'] = df_rmv['rmv_match_target'].apply(normalize_name)
-        
-        df_rmv_norm = df_rmv.dropna(subset=['normalized_name', 'CARRIER_NAME'])
-        df_mass_norm = df_mass_gov.dropna(subset=['normalized_name', 'company'])
-        
-        # 2.4 Perform Exact Match Merge
-        log.info("Performing exact match on normalized names...")
-        df_merged = pd.merge(
-            df_rmv_norm,
-            df_mass_norm,
-            on='normalized_name',
+        # --- 2.2 Pass 1: Exact Raw Match ---
+        log.info("--- Starting Pass 1: Exact Raw Match ---")
+        df_exact_matches = pd.merge(
+            df_rmv_raw,
+            df_mass_gov,
+            left_on='CARRIER_NAME',
+            right_on='company',
             how='inner',
-            suffixes=('_rmv', '_mass')
+            suffixes=('_rmv', '_pass1')
         )
-        log.info(f"Found {len(df_merged)} exact matches.")
-
-        # 2.5 Construct Final Mapping Table
-        df_mapping = df_merged[[
-            'CARRIER_NAME', 'company', 'address',
-            'phone', 'state', 'city', 'zip'
-        ]].copy()
+        log.info(f"Found {len(df_exact_matches)} exact raw matches (Pass 1).")
         
-        # Rename columns to match target table
-        df_mapping.rename(columns={
-            'CARRIER_NAME': 'rmv_name',  # <---- THIS WAS THE TYPO
+        # Get list of RMV names that are now matched
+        matched_rmv_names = df_exact_matches['CARRIER_NAME'].unique()
+
+        # --- 2.3 Pass 2: Normalized Match (for unmatched) ---
+        log.info("--- Starting Pass 2: Normalized Match ---")
+        
+        # Get RMV names that *did not* find an exact match
+        df_rmv_unmatched = df_rmv_raw[~df_rmv_raw['CARRIER_NAME'].isin(matched_rmv_names)].copy()
+        log.info(f"{len(df_rmv_unmatched)} RMV names remaining for normalization.")
+
+        if not df_rmv_unmatched.empty:
+            # 2.3a Apply Overrides (hardcodes)
+            df_rmv_unmatched = apply_hardcoded_matches(df_rmv_unmatched)
+
+            # 2.3b Normalize both sides
+            log.info("Normalizing remaining names...")
+            df_rmv_unmatched['normalized_name'] = df_rmv_unmatched['rmv_match_target'].apply(normalize_name)
+            df_mass_gov['normalized_name'] = df_mass_gov['company'].apply(normalize_name)
+            
+            # Prep for merge (drop nulls)
+            df_rmv_norm = df_rmv_unmatched.dropna(subset=['normalized_name', 'CARRIER_NAME'])
+            df_mass_norm = df_mass_gov.dropna(subset=['normalized_name', 'company'])
+            
+            # 2.3c Perform normalized merge
+            log.info("Performing exact match on normalized names...")
+            df_normalized_matches = pd.merge(
+                df_rmv_norm,
+                df_mass_norm,
+                on='normalized_name',
+                how='inner',
+                suffixes=('_rmv', '_pass2')
+            )
+            log.info(f"Found {len(df_normalized_matches)} normalized matches (Pass 2).")
+        else:
+            log.info("No RMV names left for normalized matching.")
+            # Create empty DataFrame to avoid errors later
+            df_normalized_matches = pd.DataFrame() 
+
+        # --- 2.4 Combine and Construct Final Table ---
+        log.info("Constructing final mapping table...")
+        
+        # Define the columns we want in the final table
+        final_cols = ['CARRIER_NAME', 'company', 'address', 'phone', 'state', 'city', 'zip']
+        
+        # Format Pass 1 results
+        df_final_pass1 = df_exact_matches[final_cols].copy()
+        
+        # Format Pass 2 results (if any)
+        if not df_normalized_matches.empty:
+            df_final_pass2 = df_normalized_matches[final_cols].copy()
+        else:
+            df_final_pass2 = pd.DataFrame(columns=final_cols) # Empty df with correct columns
+            
+        # Combine the results (Pass 1 first)
+        df_mapping_combined = pd.concat([df_final_pass1, df_final_pass2], ignore_index=True)
+        log.info(f"Total matches (Pass 1 + Pass 2): {len(df_mapping_combined)}")
+
+        # Rename columns
+        df_mapping_combined.rename(columns={
+            'CARRIER_NAME': 'rmv_name',
             'company': 'mass_gov_name'
         }, inplace=True)
         
-        # Add the update_dt column
-        df_mapping['update_dt'] = date.today()
+        # Add update_dt
+        df_mapping_combined['update_dt'] = date.today()
         
-        # Ensure final table is unique on rmv_name
-        df_mapping = df_mapping.drop_duplicates(subset=['rmv_name']).reset_index(drop=True)
-        log.info(f"Final mapping table has {len(df_mapping)} unique RMV mappings.")
+        # Critical: Drop duplicates *after* combining.
+        # By using keep='first', we prioritize the Pass 1 (exact) matches.
+        df_mapping_final = df_mapping_combined.drop_duplicates(subset=['rmv_name'], keep='first')
+        log.info(f"Final mapping table has {len(df_mapping_final)} unique RMV mappings.")
 
-        # 2.6 Save to SQL
+        # --- 2.5 Save to SQL ---
         recreate_mapping_table(conn)
-        insert_mapping_dataframe(conn, df_mapping)
+        insert_mapping_dataframe(conn, df_mapping_final)
         log.info("--- Part 2: RMV Mapping Complete ---")
 
         log.info("All done ✅")
