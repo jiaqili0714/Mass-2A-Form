@@ -1,6 +1,6 @@
 
 
---ADDING NEW ROWS
+--ADD NEW ROWS
 INSERT INTO [JiLi].[dbo].[MA_2A_Form_Manual_Mapping] (
     rmv_name,
     mass_gov_name,
@@ -33,3 +33,6 @@ WHERE [rmv_name] = 'Test RMV Name (Manual)';
 
 --CHECK RESULT
 select * from [JiLi].[dbo].[MA_2A_Form_Manual_Mapping] 
+
+
+
