@@ -231,6 +231,5 @@ SQL_MAPPING_TABLE = "MA_2A_Form_Mapping"
 RMV_SOURCE_DB = "CO1SQLWPV10_EnterpriseServices"
 RMV_SOURCE_TABLE = "EnterpriseServices.[dbo].[RMV_CARRIER_NAME]"
 ```
-
-*Document owner:* Product Analytics — Telematics
+$SELECTION_PLACEHOLDER$*Document owner:* Jiaqi [<jili@plymouthrock.com>](mailto:jili@plymouthrock.com)
 
