@@ -24,7 +24,7 @@ ARCHIVE_FOLDER = os.getenv("ARCHIVE_FOLDER", r"\\njredbf2001\ProductManagement\P
 
 # --- SQL Config ---
 SQL_SERVER   = os.getenv("SQL_SERVER",   "AE1SQLWPV20")
-SQL_DATABASE = os.getenv("SQL_DATABASE", "JiLi") # Target DB for all writes
+SQL_DATABASE = os.getenv("SQL_DATABASE", "Iwan") # Target DB for all writes
 SQL_SCHEMA   = os.getenv("SQL_SCHEMA",   "dbo")
 
 # --- Part 2 (Mapping) ---
