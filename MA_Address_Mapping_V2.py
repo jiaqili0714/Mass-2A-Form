@@ -23,13 +23,13 @@ today_str = datetime.today().strftime("%m%d%Y")
 ARCHIVE_FOLDER = os.getenv("ARCHIVE_FOLDER", r"\\njredbf2001\ProductManagement\Product\Auto\MASSACHUSETTS\Operational Processes\2A Form\MA Gov Company Address List")
 
 # --- SQL Config ---
-SQL_SERVER   = os.getenv("SQL_SERVER",   "AE1SQLWPV20")
+SQL_SERVER   = os.getenv("SQL_SERVER",   "ae1sqlwpv20")  # e.g. "AE1SQLWPV20"
 SQL_DATABASE = os.getenv("SQL_DATABASE", "JiLi") # Target DB for all writes
 SQL_SCHEMA   = os.getenv("SQL_SCHEMA",   "dbo")
 
 # --- Part 2 (Mapping) ---
 SQL_MAPPING_TABLE = "MA_2A_Form_Mapping"
-RMV_SOURCE_DB = "CO1SQLWPV10_EnterpriseServices"
+RMV_SOURCE_DB = "CO1SQLWPV10_EnterpriseServices"   # Database where RMV_CARRIER_NAME table lives, if using NE server it's CO1SQLWPV10, if using AE1SQLWPV20 server it's CO1SQLWPV10_EnterpriseServices
 RMV_SOURCE_TABLE = "EnterpriseServices.[dbo].[RMV_CARRIER_NAME]"
 
 # --- Connection ---
@@ -490,6 +490,14 @@ def main():
         # By using keep='first', we prioritize the Pass 1 (exact) matches.
         df_mapping_final = df_mapping_combined.drop_duplicates(subset=['rmv_name'], keep='first')
         log.info(f"Final mapping table has {len(df_mapping_final)} unique RMV mappings.")
+
+        # --- Override naming rule for (Pilgrim) rows ---
+        # Keep the original RMV name as mass_gov_name, but retain Pilgrim's address info.
+        pilgrim_mask_final = df_mapping_final['rmv_name'].str.contains(r'\(Pilgrim\)', case=False, na=False)
+        df_mapping_final.loc[pilgrim_mask_final, 'mass_gov_name'] = df_mapping_final.loc[pilgrim_mask_final, 'rmv_name']
+        log.info(f"Adjusted {pilgrim_mask_final.sum()} '(Pilgrim)' rows to keep RMV name as Mass Gov name while retaining Pilgrim address.")
+
+        
 
         # --- 2.5 Save to SQL ---
         recreate_mapping_table(conn)
