@@ -39,7 +39,6 @@ TRUSTED_CONN = os.getenv("TRUSTED_CONN", "1") not in ("0", "false", "False")
 SQL_USER     = os.getenv("SQL_USER")     # Ignored if TRUSTED_CONN=1
 SQL_PASSWORD = os.getenv("SQL_PASSWORD") # Ignored if TRUSTED_CONN=1
 
-
 # =========================
 # Logging
 # =========================
